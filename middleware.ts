@@ -84,60 +84,64 @@ export default async function middleware(req: NextRequest) {
   const redirectUrl = new URL('/auth/login', req.url);
   redirectUrl.searchParams.set('callbackUrl', encodeURI(req.url));
 
-  // JWT strategy
-  if (env.nextAuth.sessionStrategy === 'jwt') {
-    const token = await getToken({
-      req,
-    });
-
-    if (!token) {
-      return NextResponse.redirect(redirectUrl);
-    }
-  }
-
-  // Database strategy
-  else if (env.nextAuth.sessionStrategy === 'database') {
-    const url = new URL('/api/auth/session', req.url);
-
-    try {
-      const response = await fetch(url, {
-        headers: {
-          'Content-Type': 'application/json',
-          cookie: req.headers.get('cookie') || '',
-        },
+  try {
+    // JWT strategy
+    if (env.nextAuth.sessionStrategy === 'jwt') {
+      const token = await getToken({
+        req,
       });
 
-      const session = await response.json();
-
-      if (!session || !session.user) {
-        console.log("No valid session found in middleware, redirecting to login");
+      if (!token) {
         return NextResponse.redirect(redirectUrl);
       }
-    } catch (error) {
-      console.error("Error checking session in middleware:", error);
-      return NextResponse.redirect(redirectUrl);
     }
+
+    // Database strategy
+    else if (env.nextAuth.sessionStrategy === 'database') {
+      const url = new URL('/api/auth/session', req.url);
+
+      try {
+        const response = await fetch(url, {
+          headers: {
+            'Content-Type': 'application/json',
+            cookie: req.headers.get('cookie') || '',
+          },
+        });
+
+        if (!response.ok) {
+          console.error(`Session fetch failed: ${response.status} ${response.statusText}`);
+          return NextResponse.redirect(redirectUrl);
+        }
+
+        const session = await response.json();
+
+        if (!session || !session.user) {
+          return NextResponse.redirect(redirectUrl);
+        }
+      } catch (error) {
+        console.error('Middleware session fetch error:', error);
+        return NextResponse.redirect(redirectUrl);
+      }
+    }
+
+    // Apply security headers to all responses
+    const response = NextResponse.next();
+    if (env.securityHeadersEnabled) {
+      Object.entries(SECURITY_HEADERS).forEach(([key, value]) => {
+        response.headers.set(key, value);
+      });
+
+      response.headers.set(
+        'Content-Security-Policy',
+        generateCSP()
+      );
+    }
+    return response;
+  } catch (error) {
+    console.error('Middleware error:', error);
+    // If there's an error in authentication, redirect to login
+    return NextResponse.redirect(redirectUrl);
   }
-
-  const requestHeaders = new Headers(req.headers);
-  const csp = generateCSP();
-
-  requestHeaders.set('Content-Security-Policy', csp);
-
-  const response = NextResponse.next({
-    request: { headers: requestHeaders },
-  });
-
-  if (env.securityHeadersEnabled) {
-    // Set security headers
-    response.headers.set('Content-Security-Policy', csp);
-    Object.entries(SECURITY_HEADERS).forEach(([key, value]) => {
-      response.headers.set(key, value);
-    });
-  }
-
-  // All good, let the request through
-  return response;
 }
 
 export const config = {

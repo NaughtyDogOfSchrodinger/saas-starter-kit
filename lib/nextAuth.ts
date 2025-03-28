@@ -296,6 +296,7 @@ export const getAuthOptions = (
     pages: {
       signIn: '/auth/login',
       verifyRequest: '/auth/verify-request',
+      error: '/auth/error', // Add custom error page
     },
     session: {
       strategy: env.nextAuth.sessionStrategy,
