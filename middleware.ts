@@ -99,16 +99,22 @@ export default async function middleware(req: NextRequest) {
   else if (env.nextAuth.sessionStrategy === 'database') {
     const url = new URL('/api/auth/session', req.url);
 
-    const response = await fetch(url, {
-      headers: {
-        'Content-Type': 'application/json',
-        cookie: req.headers.get('cookie') || '',
-      },
-    });
+    try {
+      const response = await fetch(url, {
+        headers: {
+          'Content-Type': 'application/json',
+          cookie: req.headers.get('cookie') || '',
+        },
+      });
 
-    const session = await response.json();
+      const session = await response.json();
 
-    if (!session.user) {
+      if (!session || !session.user) {
+        console.log("No valid session found in middleware, redirecting to login");
+        return NextResponse.redirect(redirectUrl);
+      }
+    } catch (error) {
+      console.error("Error checking session in middleware:", error);
       return NextResponse.redirect(redirectUrl);
     }
   }

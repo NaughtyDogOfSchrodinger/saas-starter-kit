@@ -47,60 +47,70 @@ if (isAuthProviderEnabled('credentials')) {
   providers.push(
     CredentialsProvider({
       id: 'credentials',
+      name: 'Email & Password',
       credentials: {
-        email: { type: 'email' },
-        password: { type: 'password' },
+        email: { label: 'Email', type: 'email' },
+        password: { label: 'Password', type: 'password' },
         recaptchaToken: { type: 'text' },
       },
       async authorize(credentials) {
-        if (!credentials) {
-          throw new Error('no-credentials');
-        }
+        try {
+          if (!credentials) {
+            throw new Error('no-credentials');
+          }
 
-        const { email, password, recaptchaToken } = credentials;
+          const { email, password, recaptchaToken } = credentials;
 
-        await validateRecaptcha(recaptchaToken);
+          await validateRecaptcha(recaptchaToken);
 
-        if (!email || !password) {
-          return null;
-        }
+          if (!email || !password) {
+            console.error("Missing email or password");
+            return null;
+          }
 
-        const user = await getUser({ email });
+          const user = await getUser({ email });
 
-        if (!user) {
-          throw new Error('invalid-credentials');
-        }
+          if (!user) {
+            console.error("User not found:", email);
+            throw new Error('invalid-credentials');
+          }
 
-        if (exceededLoginAttemptsThreshold(user)) {
-          throw new Error('exceeded-login-attempts');
-        }
-
-        if (env.confirmEmail && !user.emailVerified) {
-          throw new Error('confirm-your-email');
-        }
-
-        const hasValidPassword = await verifyPassword(
-          password,
-          user?.password as string
-        );
-
-        if (!hasValidPassword) {
-          if (
-            exceededLoginAttemptsThreshold(await incrementLoginAttempts(user))
-          ) {
+          if (exceededLoginAttemptsThreshold(user)) {
             throw new Error('exceeded-login-attempts');
           }
 
-          throw new Error('invalid-credentials');
+          if (env.confirmEmail && !user.emailVerified) {
+            throw new Error('confirm-your-email');
+          }
+
+          const hasValidPassword = await verifyPassword(
+            password,
+            user?.password as string
+          );
+
+          if (!hasValidPassword) {
+            if (
+              exceededLoginAttemptsThreshold(await incrementLoginAttempts(user))
+            ) {
+              throw new Error('exceeded-login-attempts');
+            }
+
+            throw new Error('invalid-credentials');
+          }
+
+          await clearLoginAttempts(user);
+
+          console.log("User authenticated successfully:", user.id);
+
+          return {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+          };
+        } catch (error) {
+          console.error("Authorization error:", error);
+          throw error;
         }
-
-        await clearLoginAttempts(user);
-
-        return {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-        };
       },
     })
   );
@@ -239,23 +249,33 @@ async function createDatabaseSession(
   req: NextApiRequest | GetServerSidePropsContext['req'],
   res: NextApiResponse | GetServerSidePropsContext['res']
 ) {
-  const sessionToken = randomUUID();
-  const expires = new Date(Date.now() + sessionMaxAge * 1000);
+  try {
+    const sessionToken = randomUUID();
+    const expires = new Date(Date.now() + sessionMaxAge * 1000);
 
-  if (adapter.createSession) {
-    await adapter.createSession({
-      sessionToken,
-      userId: user.id,
+    if (adapter.createSession) {
+      await adapter.createSession({
+        sessionToken,
+        userId: user.id,
+        expires,
+      });
+    }
+
+    setCookie(sessionTokenCookieName, sessionToken, {
+      req,
+      res,
       expires,
+      secure: useSecureCookie,
+      path: '/',
+      sameSite: 'lax',
+      httpOnly: true,
     });
-  }
 
-  setCookie(sessionTokenCookieName, sessionToken, {
-    req,
-    res,
-    expires,
-    secure: useSecureCookie,
-  });
+    console.log("Session created successfully for user:", user.id);
+  } catch (error) {
+    console.error("Failed to create session:", error);
+    throw error;
+  }
 }
 
 export const getAuthOptions = (
@@ -285,6 +305,7 @@ export const getAuthOptions = (
     callbacks: {
       async signIn({ user, account, profile }) {
         if (!user || !user.email || !account) {
+          console.error("SignIn callback: Invalid user data or account");
           return false;
         }
 
@@ -297,7 +318,13 @@ export const getAuthOptions = (
 
         // Handle credentials provider
         if (isCredentialsProviderCallbackWithDbSession && !isIdpLogin) {
-          await createDatabaseSession(user, req, res);
+          try {
+            await createDatabaseSession(user, req, res);
+            return true;
+          } catch (error) {
+            console.error("Failed to create database session:", error);
+            return false;
+          }
         }
 
         if (account?.provider === 'credentials') {
